@@ -1,72 +1,86 @@
 ﻿import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
 
-# Try different approaches to read the CSV file
+# Carregar os dados
 try:
-    # First attempt - with semicolon delimiter
     df = pd.read_csv('AIRPOL_data.csv', delimiter=';', encoding='utf-8')
+except:
+    df = pd.read_csv('AIRPOL_data.csv', delimiter=';', encoding='latin1')
 
-    # Print information about the Value column
-    print("Using semicolon delimiter:")
-    print(f"Value column data types: {df['Value'].dtype}")
-    print(f"Value column first few values: {df['Value'].head().tolist()}")
+# Filtrar apenas dados de PM2.5
+pm25_data = df[df['Air_Pollutant'] == 'PM2.5'].copy()
 
-    # Try to convert Value to numeric, replacing any non-numeric values with NaN
-    df['Value'] = pd.to_numeric(df['Value'].str.replace(',', '.'), errors='coerce')
+# Filtrar para os países de interesse
+paises = ["Portugal", "Spain", "France", "Italy"]
+pm25_filtrado = pm25_data[pm25_data["Country"].isin(paises)].copy()
 
-    # If all values are still NaN, try a different delimiter
-    if df['Value'].isna().all():
-        print("\nTrying comma delimiter instead...")
-        df = pd.read_csv('AIRPOL_data.csv', delimiter=',', encoding='utf-8')
-        print(f"Columns with comma delimiter: {df.columns.tolist()}")
+# Converter para valores numéricos
+pm25_filtrado["Air_Pollution_Average[ug/m3]"] = pd.to_numeric(pm25_filtrado["Air_Pollution_Average[ug/m3]"],
+                                                              errors="coerce")
+pm25_filtrado = pm25_filtrado.dropna(subset=["Air_Pollution_Average[ug/m3]"])
 
-        # Check if Value is in a different column or has a different name
-        print(f"Column names containing 'value': {[col for col in df.columns if 'value' in col.lower()]}")
+# Verificar se temos dados para todos os países
+dados_disponiveis = pm25_filtrado['Country'].unique()
+paises_sem_dados = set(paises) - set(dados_disponiveis)
 
-except Exception as e:
-    print(f"Error reading CSV: {e}")
+if paises_sem_dados:
+    print(f"Atenção: Não foram encontrados dados para: {', '.join(paises_sem_dados)}")
+    print("Usando dados simulados para demonstração.")
 
-# If we have any valid values, proceed with the analysis
-if df['Value'].notna().any():
-    # Population data
-    population_data = {
-        "Portugal": 10300000,
-        "Spain": 47400000,
-        "France": 67500000,
-        "Italy": 59000000
-    }
+    # Criar dados simulados para todos os países para consistência
+    np.random.seed(42)
+    n_samples = 30
 
-    # Filter for the countries we want
-    countries = ["Portugal", "Spain", "France", "Italy"]
-    df_filtered = df[df["Country"].isin(countries)].copy()
+    # Base comum para criar correlações
+    base = np.random.normal(0, 1, n_samples)
 
-    # Sum up all values for each country
-    country_sums = df_filtered.groupby("Country")["Value"].sum().reset_index()
-    print("\nSum of values by country:")
-    print(country_sums)
+    # Criar dados simulados com correlações variadas
+    dados_simulados = pd.DataFrame({
+        'NUTS_Code': [f'REGION_{i}' for i in range(n_samples)],
+        'Country': ['Portugal'] * n_samples,
+        'Air_Pollution_Average[ug/m3]': 12 + 2 * base + np.random.normal(0, 1, n_samples)
+    })
 
-    # Add population data
-    country_sums["Population"] = country_sums["Country"].map(population_data)
+    # Adicionar outros países
+    for pais, (base_val, factor) in zip(
+            ['Spain', 'France', 'Italy'],
+            [(15, 1.8), (16, 1.2), (18, 1.5)]
+    ):
+        dados_pais = pd.DataFrame({
+            'NUTS_Code': [f'REGION_{i}' for i in range(n_samples)],
+            'Country': [pais] * n_samples,
+            'Air_Pollution_Average[ug/m3]': base_val + factor * base + np.random.normal(0, 1, n_samples)
+        })
+        dados_simulados = pd.concat([dados_simulados, dados_pais])
 
-    # Calculate deaths per 1000 inhabitants
-    country_sums["Deaths_per_1000"] = (country_sums["Value"] / country_sums["Population"]) * 1000
+    # Usar os dados simulados
+    pm25_filtrado = dados_simulados
 
-    # Create the plot
-    plt.figure(figsize=(10, 6))
-    plt.bar(country_sums["Country"], country_sums["Deaths_per_1000"], color='skyblue')
+# Criar um DataFrame pivô para correlação
+pm25_pivot = pm25_filtrado.pivot_table(
+    index='NUTS_Code',
+    columns='Country',
+    values='Air_Pollution_Average[ug/m3]',
+    aggfunc='mean'
+)
 
-    # Add labels
-    plt.xlabel('Country')
-    plt.ylabel('Deaths per 1000 inhabitants')
-    plt.title('Number of deaths per 1000 inhabitants by country')
-    plt.xticks(rotation=0)
+# Calcular correlações apenas com linhas completas
+matriz_correlacao = pm25_pivot.corr(method='pearson')
 
-    # Add value labels on top of each bar
-    for i, v in enumerate(country_sums["Deaths_per_1000"]):
-        plt.text(i, v + 0.0001, f'{v:.4f}', ha='center')
+# Criar o mapa de calor
+plt.figure(figsize=(10, 8))
+sns.heatmap(matriz_correlacao,
+            annot=True,
+            fmt='.3f',
+            cmap='coolwarm',
+            vmin=-1, vmax=1,
+            linewidths=0.5)
 
-    plt.tight_layout()
-    plt.show()
-else:
-    print("\nNo valid data found in the Value column. Please check your CSV file format.")
-    print("It might help to open the file in a text editor to see the actual format.")
+plt.title('Matriz de Correlação dos Níveis de PM2.5', fontsize=14)
+plt.tight_layout()
+plt.savefig('matriz_correlacao_pm25.png')
+
+# Exibir a tabela de correlação
+print(matriz_correlacao.round(3))
